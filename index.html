@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Frequency Tuner</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .controls {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            min-width: 200px;
+        }
+        button {
+            background: #4a90e2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #357abd;
+        }
+        button.active {
+            background: #e24a4a;
+        }
+        input[type="range"] {
+            width: 100%;
+            margin: 10px 0;
+        }
+        canvas {
+            border: 1px solid #444;
+            margin: 10px 0;
+            background: #000;
+        }
+        .frequency-display {
+            font-size: 24px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        select {
+            background: #3a3a3a;
+            color: white;
+            border: 1px solid #555;
+            padding: 8px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Audio Frequency Tuner</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <h3>Binaural Beats</h3>
+                <select id="frequencyRange">
+                    <option value="delta">Delta (0.5-4 Hz)</option>
+                    <option value="theta">Theta (4-8 Hz)</option>
+                    <option value="alpha" selected>Alpha (8-13 Hz)</option>
+                    <option value="beta">Beta (13-30 Hz)</option>
+                    <option value="gamma">Gamma (30-100 Hz)</option>
+                </select>
+                <br><br>
+                <button id="playButton">Start Binaural Beats</button>
+                <br>
+                <label>Volume: <span id="volumeDisplay">50%</span></label>
+                <input type="range" id="volume" min="0" max="100" value="50">
+                
+                <label>Target Frequency: <span id="freqDisplay">10 Hz</span></label>
+                <input type="range" id="targetFreq" min="0.5" max="100" value="10" step="0.5">
+            </div>
+            
+            <div class="control-group">
+                <h3>Microphone</h3>
+                <button id="micButton">Start Microphone</button>
+                <br>
+                <label>Input Gain: <span id="gainDisplay">50%</span></label>
+                <input type="range" id="inputGain" min="0" max="100" value="50">
+            </div>
+            
+            <div class="control-group">
+                <h3>White Noise</h3>
+                <button id="noiseButton">Start White Noise</button>
+                <br>
+                <label>Noise Volume: <span id="noiseVolumeDisplay">30%</span></label>
+                <input type="range" id="noiseVolume" min="0" max="100" value="30">
+            </div>
+        </div>
+        
+        <div class="frequency-display">
+            <div>Input Frequency: <span id="inputFreqDisplay">0 Hz</span></div>
+            <div>Match Quality: <span id="matchQuality">0%</span></div>
+        </div>
+        
+        <canvas id="visualizer" width="800" height="200"></canvas>
+        <canvas id="spectrum" width="800" height="150"></canvas>
+    </div>
+
+    <script>
+        // Audio context and nodes
+        let audioContext;
+        let analyser;
+        let microphone;
+        let leftOsc, rightOsc;
+        let gainNode;
+        let whiteNoiseNode;
+        let isPlaying = false;
+        let isMicActive = false;
+        let isNoiseActive = false;
+
+        // Frequency ranges
+        const frequencyRanges = {
+            delta: { min: 0.5, max: 4, default: 2 },
+            theta: { min: 4, max: 8, default: 6 },
+            alpha: { min: 8, max: 13, default: 10 },
+            beta: { min: 13, max: 30, default: 20 },
+            gamma: { min: 30, max: 100, default: 40 }
+        };
+
+        // Initialize audio context
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+        }
+
+        // Create binaural beats
+        function createBinauralBeats(frequency) {
+            if (leftOsc) leftOsc.stop();
+            if (rightOsc) rightOsc.stop();
+
+            leftOsc = audioContext.createOscillator();
+            rightOsc = audioContext.createOscillator();
+            gainNode = audioContext.createGain();
+
+            const baseFreq = 200; // Base carrier frequency
+            const beatFreq = frequency;
+
+            leftOsc.frequency.setValueAtTime(baseFreq, audioContext.currentTime);
+            rightOsc.frequency.setValueAtTime(baseFreq + beatFreq, audioContext.currentTime);
+
+            const leftGain = audioContext.createGain();
+            const rightGain = audioContext.createGain();
+            const merger = audioContext.createChannelMerger(2);
+
+            leftOsc.connect(leftGain);
+            rightOsc.connect(rightGain);
+            leftGain.connect(merger, 0, 0);
+            rightGain.connect(merger, 0, 1);
+            merger.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            const volume = document.getElementById('volume').value / 100 * 0.3;
+            gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+
+            leftOsc.start();
+            rightOsc.start();
+        }
+
+        // Create white noise
+        function createWhiteNoise() {
+            const bufferSize = 2 * audioContext.sampleRate;
+            const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+
+            whiteNoiseNode = audioContext.createBufferSource();
+            whiteNoiseNode.buffer = noiseBuffer;
+            whiteNoiseNode.loop = true;
+
+            const noiseGain = audioContext.createGain();
+            const volume = document.getElementById('noiseVolume').value / 100 * 0.2;
+            noiseGain.gain.setValueAtTime(volume, audioContext.currentTime);
+
+            whiteNoiseNode.connect(noiseGain);
+            noiseGain.connect(audioContext.destination);
+            whiteNoiseNode.start();
+        }
+
+        // Setup microphone
+        async function setupMicrophone() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                microphone = audioContext.createMediaStreamSource(stream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                microphone.connect(analyser);
+                
+                const gainControl = audioContext.createGain();
+                const gain = document.getElementById('inputGain').value / 100;
+                gainControl.gain.setValueAtTime(gain, audioContext.currentTime);
+                microphone.connect(gainControl);
+                
+                return true;
+            } catch (err) {
+                alert('Microphone access denied');
+                return false;
+            }
+        }
+
+        // Visualizations
+        function drawVisualizer() {
+            if (!analyser) return;
+
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            analyser.getByteTimeDomainData(dataArray);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#00ff00';
+            ctx.beginPath();
+
+            const sliceWidth = canvas.width / bufferLength;
+            let x = 0;
+
+            for (let i = 0; i < bufferLength; i++) {
+                const v = dataArray[i] / 128.0;
+                const y = v * canvas.height / 2;
+
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+                x += sliceWidth;
+            }
+
+            ctx.stroke();
+            requestAnimationFrame(drawVisualizer);
+        }
+
+        function drawSpectrum() {
+            if (!analyser) return;
+
+            const canvas = document.getElementById('spectrum');
+            const ctx = canvas.getContext('2d');
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            analyser.getByteFrequencyData(dataArray);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const barWidth = canvas.width / bufferLength * 2.5;
+            let x = 0;
+
+            for (let i = 0; i < bufferLength; i++) {
+                const barHeight = dataArray[i] / 255 * canvas.height;
+
+                const red = barHeight + 25 * (i / bufferLength);
+                const green = 250 * (i / bufferLength);
+                const blue = 50;
+
+                ctx.fillStyle = `rgb(${red},${green},${blue})`;
+                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+                x += barWidth + 1;
+            }
+
+            // Detect dominant frequency
+            let maxIndex = 0;
+            let maxValue = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                if (dataArray[i] > maxValue) {
+                    maxValue = dataArray[i];
+                    maxIndex = i;
+                }
+            }
+
+            const frequency = maxIndex * audioContext.sampleRate / (2 * bufferLength);
+            document.getElementById('inputFreqDisplay').textContent = frequency.toFixed(1) + ' Hz';
+
+            // Calculate match quality
+            const targetFreq = parseFloat(document.getElementById('targetFreq').value);
+            const diff = Math.abs(frequency - targetFreq);
+            const matchPercent = Math.max(0, 100 - (diff / targetFreq * 100));
+            document.getElementById('matchQuality').textContent = matchPercent.toFixed(0) + '%';
+
+            requestAnimationFrame(drawSpectrum);
+        }
+
+        // Event listeners
+        document.getElementById('playButton').addEventListener('click', function() {
+            initAudio();
+            
+            if (!isPlaying) {
+                const frequency = parseFloat(document.getElementById('targetFreq').value);
+                createBinauralBeats(frequency);
+                this.textContent = 'Stop Binaural Beats';
+                this.classList.add('active');
+                isPlaying = true;
+            } else {
+                if (leftOsc) leftOsc.stop();
+                if (rightOsc) rightOsc.stop();
+                this.textContent = 'Start Binaural Beats';
+                this.classList.remove('active');
+                isPlaying = false;
+            }
+        });
+
+        document.getElementById('micButton').addEventListener('click', async function() {
+            initAudio();
+            
+            if (!isMicActive) {
+                const success = await setupMicrophone();
+                if (success) {
+                    this.textContent = 'Stop Microphone';
+                    this.classList.add('active');
+                    isMicActive = true;
+                    drawVisualizer();
+                    drawSpectrum();
+                }
+            } else {
+                this.textContent = 'Start Microphone';
+                this.classList.remove('active');
+                isMicActive = false;
+            }
+        });
+
+        document.getElementById('noiseButton').addEventListener('click', function() {
+            initAudio();
+            
+            if (!isNoiseActive) {
+                createWhiteNoise();
+                this.textContent = 'Stop White Noise';
+                this.classList.add('active');
+                isNoiseActive = true;
+            } else {
+                if (whiteNoiseNode) whiteNoiseNode.stop();
+                this.textContent = 'Start White Noise';
+                this.classList.remove('active');
+                isNoiseActive = false;
+            }
+        });
+
+        document.getElementById('frequencyRange').addEventListener('change', function() {
+            const range = frequencyRanges[this.value];
+            const targetFreqSlider = document.getElementById('targetFreq');
+            targetFreqSlider.min = range.min;
+            targetFreqSlider.max = range.max;
+            targetFreqSlider.value = range.default;
+            document.getElementById('freqDisplay').textContent = range.default + ' Hz';
+        });
+
+        document.getElementById('targetFreq').addEventListener('input', function() {
+            document.getElementById('freqDisplay').textContent = this.value + ' Hz';
+            if (isPlaying) {
+                createBinauralBeats(parseFloat(this.value));
+            }
+        });
+
+        document.getElementById('volume').addEventListener('input', function() {
+            document.getElementById('volumeDisplay').textContent = this.value + '%';
+            if (gainNode) {
+                gainNode.gain.setValueAtTime(this.value / 100 * 0.3, audioContext.currentTime);
+            }
+        });
+
+        document.getElementById('inputGain').addEventListener('input', function() {
+            document.getElementById('gainDisplay').textContent = this.value + '%';
+        });
+
+        document.getElementById('noiseVolume').addEventListener('input', function() {
+            document.getElementById('noiseVolumeDisplay').textContent = this.value + '%';
+        });
+    </script>
+</body>
+</html>
